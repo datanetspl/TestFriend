@@ -9,13 +9,19 @@ import importlib.util
 import inspect
 import os
 import sys
-from typing import Any, Dict, List, Tuple, Callable
+import random
+import re
+import json
+from typing import Any, Dict, List, Tuple, Callable, Union, Optional
 
 
 class FunctionTester:
-    def __init__(self, target_directory: str = "."):
+    def __init__(self, target_directory: str = ".", api_key: Optional[str] = None):
         self.target_directory = target_directory
         self.discovered_functions = {}
+        self.api_key = api_key
+        self.llm_available = api_key is not None
+        self.test_results = []  # Track all test results
 
     def discover_functions(self) -> Dict[str, Callable]:
         """Discover all functions in Python files within the target directory."""
@@ -86,8 +92,201 @@ class FunctionTester:
 
         return params, defaults
 
-    def prompt_for_inputs(self, func: Callable) -> Dict[str, Any]:
-        """Interactively prompt user for function inputs."""
+    def generate_intelligent_inputs(self, func: Callable) -> Dict[str, Any]:
+        """Generate intelligent test inputs based on function signature and context."""
+        params, defaults = self.get_function_signature(func)
+        inputs = {}
+
+        # Analyze function docstring for hints
+        docstring = func.__doc__ or ""
+
+        for param in params:
+            if param in defaults:
+                # Use default value as a starting point
+                inputs[param] = defaults[param]
+            else:
+                # Generate based on parameter name and context
+                inputs[param] = self._generate_value_for_parameter(param, func, docstring)
+
+        return inputs
+
+    def _call_llm_for_parameter_analysis(self, param_name: str, func_name: str, docstring: str) -> Optional[Dict]:
+        """Use LLM to analyze parameter and suggest appropriate test value."""
+        if not self.llm_available:
+            return None
+
+        try:
+            import requests
+
+            prompt = f"""
+            Analyze this Python function parameter and suggest an appropriate test value:
+            
+            Function: {func_name}
+            Parameter: {param_name}
+            Docstring: {docstring or "No docstring provided"}
+            
+            Based on the parameter name and context, determine:
+            1. The most likely data type (int, float, str, bool, list, dict)
+            2. An appropriate test value
+            3. A brief reasoning
+            
+            Respond with valid JSON only:
+            {{
+                "data_type": "int|float|str|bool|list|dict",
+                "test_value": <actual_value>,
+                "reasoning": "brief explanation"
+            }}
+            
+            Examples:
+            - weight → {{"data_type": "float", "test_value": 70.5, "reasoning": "weight is typically a decimal number in kg"}}
+            - name → {{"data_type": "str", "test_value": "John Doe", "reasoning": "name is a string identifier"}}
+            - is_active → {{"data_type": "bool", "test_value": true, "reasoning": "boolean flag parameter"}}
+            """
+
+            headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+
+            data = {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": prompt}], "max_tokens": 150, "temperature": 0.3}
+
+            response = requests.post("https://api.openai.com/v1/chat/completions", headers=headers, json=data, timeout=10)
+
+            if response.status_code == 200:
+                result = response.json()
+                content = result["choices"][0]["message"]["content"].strip()
+
+                # Extract JSON from response
+                json_match = re.search(r"\{.*\}", content, re.DOTALL)
+                if json_match:
+                    return json.loads(json_match.group())
+
+        except Exception as e:
+            print(f"LLM analysis failed: {e}")
+
+        return None
+
+    def _generate_value_for_parameter(self, param_name: str, func: Callable, docstring: str) -> Any:
+        """Generate a value for a specific parameter based on its name and context."""
+        # Try LLM analysis first if available
+        if self.llm_available:
+            llm_result = self._call_llm_for_parameter_analysis(param_name, func.__name__, docstring)
+            if llm_result and "test_value" in llm_result:
+                print(f"  LLM suggestion for '{param_name}': {llm_result['test_value']} ({llm_result.get('reasoning', 'No reasoning')})")
+                return llm_result["test_value"]
+
+        param_lower = param_name.lower()
+
+        # Enhanced number-related parameters
+        number_keywords = ["num", "count", "size", "length", "width", "height", "age", "year", "weight", "mass", "distance", "speed", "price", "cost", "amount", "quantity", "volume", "area", "radius", "diameter", "score", "rating"]
+
+        if any(word in param_lower for word in number_keywords):
+            if "age" in param_lower:
+                return random.randint(18, 80)
+            elif "year" in param_lower:
+                return random.randint(1990, 2024)
+            elif "weight" in param_lower or "mass" in param_lower:
+                return round(random.uniform(50.0, 120.0), 1)  # kg
+            elif "height" in param_lower:
+                return round(random.uniform(1.5, 2.1), 2)  # meters
+            elif any(word in param_lower for word in ["length", "width", "distance", "radius"]):
+                return round(random.uniform(1.0, 100.0), 1)
+            elif any(word in param_lower for word in ["price", "cost", "amount"]):
+                return round(random.uniform(10.0, 1000.0), 2)
+            elif any(word in param_lower for word in ["score", "rating"]):
+                return random.randint(1, 10)
+            elif "percentage" in param_lower or "percent" in param_lower:
+                return random.randint(0, 100)
+            else:
+                return random.randint(1, 100)
+
+        # Enhanced string-related parameters
+        string_keywords = ["name", "text", "string", "message", "word", "title", "description", "address", "city", "country", "subject", "content", "label"]
+
+        if any(word in param_lower for word in string_keywords):
+            if "name" in param_lower:
+                if "first" in param_lower:
+                    return random.choice(["Alice", "Bob", "Charlie", "Diana", "Eve"])
+                elif "last" in param_lower:
+                    return random.choice(["Smith", "Johnson", "Williams", "Brown", "Jones"])
+                else:
+                    return random.choice(["Alice Smith", "Bob Johnson", "Charlie Brown"])
+            elif "email" in param_lower:
+                return "test@example.com"
+            elif "address" in param_lower:
+                return "123 Main St, Anytown, USA"
+            elif "city" in param_lower:
+                return random.choice(["New York", "London", "Tokyo", "Paris", "Sydney"])
+            elif "country" in param_lower:
+                return random.choice(["USA", "UK", "Japan", "France", "Australia"])
+            elif "subject" in param_lower or "title" in param_lower:
+                return random.choice(["Important Update", "Meeting Reminder", "Project Status"])
+            elif "message" in param_lower or "content" in param_lower:
+                return random.choice(["Hello World", "This is a test message", "Sample content"])
+            else:
+                return "sample_text"
+
+        # Boolean parameters
+        bool_keywords = ["is_", "has_", "can_", "should_", "flag", "enabled", "active", "valid"]
+        if any(word in param_lower for word in bool_keywords):
+            return random.choice([True, False])
+
+        # List/array parameters
+        list_keywords = ["list", "array", "items", "numbers", "values", "data"]
+        if any(word in param_lower for word in list_keywords):
+            if "numbers" in param_lower or "values" in param_lower:
+                return [random.randint(1, 10) for _ in range(random.randint(2, 5))]
+            else:
+                return [f"item{i}" for i in range(1, random.randint(3, 6))]
+
+        # Temperature parameters
+        if "temp" in param_lower:
+            if "celsius" in param_lower:
+                return random.randint(-10, 40)
+            elif "fahrenheit" in param_lower:
+                return random.randint(14, 104)
+            else:
+                return random.randint(20, 30)
+
+        # Coordinate parameters
+        if param_lower in ["x", "y", "z", "lat", "lon", "latitude", "longitude"]:
+            if param_lower in ["lat", "latitude"]:
+                return round(random.uniform(-90, 90), 6)
+            elif param_lower in ["lon", "longitude"]:
+                return round(random.uniform(-180, 180), 6)
+            else:
+                return random.randint(0, 100)
+
+        # Mathematical parameters
+        if param_lower in ["a", "b", "c", "n", "m", "k"]:
+            return random.randint(1, 10)
+
+        # Analyze docstring for additional context
+        if docstring:
+            doc_lower = docstring.lower()
+            if re.search(r"factorial|fact", doc_lower) and param_lower == "n":
+                return random.randint(1, 8)  # Keep factorial small
+            if re.search(r"bmi|body.*mass", doc_lower):
+                if "weight" in param_lower:
+                    return round(random.uniform(50.0, 120.0), 1)
+                elif "height" in param_lower:
+                    return round(random.uniform(1.5, 2.1), 2)
+            if re.search(r"email", doc_lower) and any(word in param_lower for word in ["to", "recipient", "sender"]):
+                return "user@example.com"
+
+        # Default fallbacks
+        if len(param_name) == 1:  # Single letter parameters
+            return random.randint(1, 10)
+
+        # Check if it might be a numeric parameter based on context
+        if re.search(r"\d", param_name):  # Contains digits
+            return random.randint(1, 100)
+
+        # Default string for unknown parameters
+        return f"test_{param_name}"
+
+    def prompt_for_inputs(self, func: Callable, auto_generate: bool = False) -> Dict[str, Any]:
+        """Interactively prompt user for function inputs or auto-generate them."""
+        if auto_generate:
+            return self.generate_intelligent_inputs(func)
+
         params, defaults = self.get_function_signature(func)
         inputs = {}
 
@@ -95,27 +294,87 @@ class FunctionTester:
         if func.__doc__:
             print(f"Description: {func.__doc__.strip()}")
 
+        # Offer to auto-generate inputs
+        auto_choice = input("\nAuto-generate inputs? (y/n, default: n): ").strip().lower()
+        if auto_choice == "y":
+            return self.generate_intelligent_inputs(func)
+
         for param in params:
             default_val = defaults.get(param)
+            suggested_val = self._generate_value_for_parameter(param, func, func.__doc__ or "")
+
             prompt = f"Enter value for '{param}'"
             if default_val is not None:
                 prompt += f" (default: {default_val})"
-            prompt += ": "
+            prompt += f" (suggested: {suggested_val}): "
 
             user_input = input(prompt).strip()
 
             if not user_input and default_val is not None:
                 inputs[param] = default_val
-            elif user_input:
+            elif not user_input:
+                inputs[param] = suggested_val
+            else:
                 # Try to evaluate as Python literal, fallback to string
                 try:
                     inputs[param] = ast.literal_eval(user_input)
                 except (ValueError, SyntaxError):
                     inputs[param] = user_input
-            else:
-                inputs[param] = None
 
         return inputs
+
+    def add_test_result(self, func_name: str, inputs: Dict[str, Any], result: Any, success: bool, verification: Optional[str] = None):
+        """Add a test result to the tracking list."""
+        test_record = {"function_name": func_name, "inputs": inputs.copy(), "output": result, "success": success, "verification": verification, "timestamp": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")}  # 'PASSED', 'FAILED', or None
+        self.test_results.append(test_record)
+
+    def display_test_summary(self):
+        """Display a summary of all test results."""
+        if not self.test_results:
+            print("\n📊 No tests were executed.")
+            return
+
+        print("\n" + "=" * 80)
+        print("📊 TEST SUMMARY")
+        print("=" * 80)
+
+        total_tests = len(self.test_results)
+        successful_executions = sum(1 for test in self.test_results if test["success"])
+        verified_passed = sum(1 for test in self.test_results if test["verification"] == "PASSED")
+        verified_failed = sum(1 for test in self.test_results if test["verification"] == "FAILED")
+        unverified = sum(1 for test in self.test_results if test["verification"] is None and test["success"])
+
+        print(f"Total Tests: {total_tests}")
+        print(f"Successful Executions: {successful_executions}")
+        print(f"Execution Errors: {total_tests - successful_executions}")
+        print(f"Verified Passed: {verified_passed}")
+        print(f"Verified Failed: {verified_failed}")
+        print(f"Unverified: {unverified}")
+        print("-" * 80)
+
+        for i, test in enumerate(self.test_results, 1):
+            status_icon = "✅" if test["success"] else "❌"
+            verification_icon = ""
+            if test["verification"] == "PASSED":
+                verification_icon = " ✅"
+            elif test["verification"] == "FAILED":
+                verification_icon = " ❌"
+            elif test["success"]:
+                verification_icon = " ❓"
+
+            print(f"{i:2d}. {status_icon} {test['function_name']}{verification_icon}")
+            print(f"    Input:  {test['inputs']}")
+            print(f"    Output: {test['output']}")
+            print(f"    Time:   {test['timestamp']}")
+            if not test["success"]:
+                print(f"    Status: EXECUTION ERROR")
+            elif test["verification"]:
+                print(f"    Status: VERIFICATION {test['verification']}")
+            else:
+                print(f"    Status: NOT VERIFIED")
+            print()
+
+        print("=" * 80)
 
     def run_test(self, func: Callable, inputs: Dict[str, Any]) -> Tuple[Any, bool]:
         """Run the function with given inputs and return result and success status."""
@@ -157,23 +416,69 @@ class FunctionTester:
                     selected_key = func_list[func_index]
                     selected_func = functions[selected_key]
 
-                    # Get inputs from user
-                    inputs = self.prompt_for_inputs(selected_func)
+                    # Ask for testing mode
+                    mode = input("\nTesting mode:\n1. Manual input\n2. Auto-generate inputs\n3. Batch test (multiple auto-generated inputs)\nSelect mode (1-3, default: 1): ").strip()
 
-                    # Run the test
-                    print(f"\nRunning {selected_func.__name__} with inputs: {inputs}")
-                    result, success = self.run_test(selected_func, inputs)
+                    if mode == "3":
+                        # Batch testing mode
+                        num_tests = input("Number of test cases to generate (default: 5): ").strip()
+                        try:
+                            num_tests = int(num_tests) if num_tests else 5
+                        except ValueError:
+                            num_tests = 5
 
-                    # Display result
-                    print(f"\nResult: {result}")
-                    if success:
-                        expected = input("Is this the expected output? (y/n): ").strip().lower()
-                        if expected == "y":
-                            print("✓ Test passed!")
-                        else:
-                            print("✗ Test failed - output not as expected")
+                        print(f"\nRunning {num_tests} auto-generated test cases for {selected_func.__name__}:")
+                        print("-" * 50)
+
+                        for i in range(num_tests):
+                            inputs = self.generate_intelligent_inputs(selected_func)
+                            print(f"\nTest {i+1}: {inputs}")
+                            result, success = self.run_test(selected_func, inputs)
+
+                            verification = None
+                            if success:
+                                print(f"Result: {result}")
+                                expected = input("Expected? (y/n/s to skip remaining): ").strip().lower()
+                                if expected == "y":
+                                    print("✓ Test passed!")
+                                    verification = "PASSED"
+                                elif expected == "s":
+                                    # Track this test as unverified before breaking
+                                    self.add_test_result(selected_func.__name__, inputs, result, success, None)
+                                    break
+                                else:
+                                    print("✗ Test failed - output not as expected")
+                                    verification = "FAILED"
+                            else:
+                                print(f"✗ Error: {result}")
+
+                            # Track the test result
+                            self.add_test_result(selected_func.__name__, inputs, result, success, verification)
                     else:
-                        print("✗ Test failed - function threw an exception")
+                        # Single test mode
+                        auto_generate = mode == "2"
+                        inputs = self.prompt_for_inputs(selected_func, auto_generate)
+
+                        # Run the test
+                        print(f"\nRunning {selected_func.__name__} with inputs: {inputs}")
+                        result, success = self.run_test(selected_func, inputs)
+
+                        # Display result
+                        print(f"\nResult: {result}")
+                        verification = None
+                        if success:
+                            expected = input("Is this the expected output? (y/n): ").strip().lower()
+                            if expected == "y":
+                                print("✓ Test passed!")
+                                verification = "PASSED"
+                            else:
+                                print("✗ Test failed - output not as expected")
+                                verification = "FAILED"
+                        else:
+                            print("✗ Test failed - function threw an exception")
+
+                        # Track the test result
+                        self.add_test_result(selected_func.__name__, inputs, result, success, verification)
 
                     input("\nPress Enter to continue...")
                 else:
@@ -181,8 +486,12 @@ class FunctionTester:
 
             except (ValueError, KeyboardInterrupt):
                 print("Invalid input or interrupted.")
+                break
             except Exception as e:
                 print(f"Error: {e}")
+
+        # Display test summary when exiting
+        self.display_test_summary()
 
 
 def main():
@@ -191,11 +500,40 @@ def main():
 
     parser = argparse.ArgumentParser(description="Interactive Python Function Tester")
     parser.add_argument("--directory", "-d", default=".", help="Directory to search for Python files (default: current directory)")
+    parser.add_argument("--api-key", "-k", help="OpenAI API key for intelligent input generation (optional)")
+    parser.add_argument("--web", "-w", action="store_true", help="Launch web interface instead of terminal")
+    parser.add_argument("--port", "-p", type=int, default=8080, help="Port for web interface (default: 8080)")
 
     args = parser.parse_args()
 
-    tester = FunctionTester(args.directory)
-    tester.interactive_testing_session()
+    # Check for API key in environment if not provided
+    api_key = args.api_key
+    if not api_key:
+        api_key = os.environ.get("OPENAI_API_KEY")
+
+    if api_key:
+        print("🤖 LLM-powered intelligent input generation enabled")
+    else:
+        print("📝 Using rule-based input generation (use --api-key or set OPENAI_API_KEY for LLM analysis)")
+
+    tester = FunctionTester(args.directory, api_key)
+
+    if args.web:
+        # Launch web interface
+        from web_interface import start_web_interface
+
+        print("🔍 Discovering functions...")
+        tester.discover_functions()
+
+        if not tester.discovered_functions:
+            print("❌ No functions found in the specified directory")
+            return
+
+        print(f"✅ Found {len(tester.discovered_functions)} functions")
+        start_web_interface(tester, args.port)
+    else:
+        # Launch terminal interface
+        tester.interactive_testing_session()
 
 
 if __name__ == "__main__":
