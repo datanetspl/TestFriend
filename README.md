@@ -9,6 +9,8 @@ An interactive tool to automatically discover and test Python functions in your 
 - Interactive function selection with visual feedback
 - **LLM-powered intelligent input generation** with OpenAI API integration
 - **Enhanced rule-based input generation** for common parameter patterns
+- **Class instance support** with interactive attribute input
+- **Class method testing** for instance, static, and class methods
 - Dynamic input prompting with smart suggestions
 - Handles default parameters
 - Multiple testing modes: manual, auto-generate, and batch testing
@@ -75,6 +77,86 @@ For cases without API access, the tool uses comprehensive pattern matching:
 - **Lists**: `numbers` → `[1, 5, 3]`, `items` → `['item1', 'item2']`
 - **Coordinates**: `latitude` → -90 to 90, `longitude` → -180 to 180
 - **Special cases**: BMI functions get appropriate weight/height, factorial gets small numbers
+
+## Class Instance Support
+
+The tool automatically detects when function parameters expect class instances and provides interactive creation:
+
+### **Automatic Detection**
+- **Type annotations**: Functions with typed parameters (e.g., `def process_person(person: Person)`)
+- **Parameter naming**: Heuristic detection based on parameter names (e.g., `person`, `rectangle`, `account`)
+- **Available classes**: Discovers classes from the same modules as your functions
+
+### **Interactive Creation**
+- **Terminal**: Step-by-step prompts for each class attribute
+- **Web Interface**: Expandable forms with dedicated class input sections
+- **Nested classes**: Supports classes that contain other class instances
+- **Smart defaults**: Uses class constructor defaults and intelligent suggestions
+
+### **Example Classes**
+```python
+class Person:
+    def __init__(self, name, age, email=None):
+        self.name = name
+        self.age = age
+        self.email = email
+
+def get_person_info(person: Person):
+    return f"{person.name} is {person.age} years old"
+```
+
+When testing `get_person_info`, the tool will:
+1. Detect that `person` expects a `Person` instance
+2. Prompt for `name`, `age`, and `email` (with default None)
+3. Create the Person instance automatically
+4. Execute the function with the created instance
+
+## Class Method Testing
+
+The tool now supports testing methods within classes, including:
+
+### **Method Types Supported**
+- **Instance Methods**: Regular methods that operate on class instances
+- **Static Methods**: Methods that don't require class instances (`@staticmethod`)
+- **Class Methods**: Methods that operate on the class itself (`@classmethod`)
+
+### **Automatic Method Discovery**
+- Scans classes for public methods (not starting with `_`)
+- Displays methods as `ClassName.method_name` in the function list
+- Shows method type in the interface (instance/static/class method)
+
+### **Instance Method Handling**
+- **Automatic Instance Creation**: Creates class instances automatically when needed
+- **Interactive Setup**: Prompts for constructor parameters if required
+- **Existing Instance Support**: Option to provide existing instances (advanced)
+
+### **Example Class Methods**
+```python
+class Calculator:
+    def __init__(self, precision=2):
+        self.precision = precision
+    
+    def add(self, a, b):
+        """Instance method - needs Calculator instance."""
+        return round(a + b, self.precision)
+    
+    @staticmethod
+    def is_even(number):
+        """Static method - no instance needed."""
+        return number % 2 == 0
+    
+    @classmethod
+    def create_scientific(cls):
+        """Class method - operates on class."""
+        return cls(precision=10)
+```
+
+### **Testing Flow**
+1. **Method Selection**: Choose `Calculator.add` from the function list
+2. **Instance Creation**: Tool creates Calculator instance (prompts for precision if needed)
+3. **Parameter Input**: Enter values for `a` and `b`
+4. **Execution**: Calls `calculator_instance.add(a, b)`
+5. **Results**: Shows both the result and the instance state
 
 ## Input Types
 
@@ -175,6 +257,7 @@ The web interface provides a modern, user-friendly alternative to the terminal:
 
 - **Visual Function Browser**: Browse functions with syntax highlighting
 - **Interactive Parameter Forms**: Easy-to-use input fields with validation
+- **Class Instance Creation**: Interactive forms for creating class instances
 - **One-Click Auto-Generation**: Generate intelligent inputs with a button click
 - **Real-Time Results**: See function outputs immediately with success/error indicators
 - **Interactive Verification**: Mark results as correct/incorrect with visual feedback
