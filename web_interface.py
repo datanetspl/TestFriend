@@ -11,6 +11,12 @@ import inspect
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
 from function_tester import FunctionTester
+from json import JSONEncoder
+
+
+class JEncoder(JSONEncoder):
+    def default(self, o):
+        return o.__dict__
 
 
 class WebTestingHandler(BaseHTTPRequestHandler):
@@ -269,7 +275,7 @@ class WebTestingHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(summary_data).encode())
+        self.wfile.write(JEncoder().encode(summary_data).encode())
 
     def get_html_template(self):
         """Return the HTML template for the web interface."""

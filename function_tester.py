@@ -470,9 +470,7 @@ class FunctionTester:
             if default_val is not None:
                 prompt += f" (default: {default_val})"
             prompt += f" (suggested: {suggested_val}): "
-
             user_input = input(prompt).strip()
-
             if not user_input and default_val is not None:
                 inputs[param] = default_val
             elif not user_input:
@@ -755,7 +753,11 @@ class FunctionTester:
                         inputs = self.prompt_for_inputs(selected_func, auto_generate)
 
                         # Run the test
-                        print(f"\nRunning {selected_func['name']} with inputs: {inputs}")
+                        if callable(selected_func):
+                            funcname = selected_func.__name__
+                        else:
+                            funcname = selected_func["name"]
+                        print(f"\nRunning {funcname} with inputs: {inputs}")
                         result, success = self.run_test(selected_func, inputs)
 
                         # Display result
@@ -773,7 +775,7 @@ class FunctionTester:
                             print("✗ Test failed - function threw an exception")
 
                         # Track the test result
-                        self.add_test_result(selected_func.__name__, inputs, result, success, verification)
+                        self.add_test_result(funcname, inputs, result, success, verification)
 
                     input("\nPress Enter to continue...")
                 else:
